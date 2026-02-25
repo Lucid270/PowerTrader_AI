@@ -8,11 +8,17 @@ from typing import Any, Dict, Optional
 import requests
 from nacl.signing import SigningKey
 import os
+import sys
 import colorama
 from colorama import Fore, Style
 import traceback
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from cryptography.hazmat.primitives import serialization
+
+import urllib.parse as _urlparse
+
+# Dry-run detection: command-line flag or environment variable
+DRY_RUN = ("--dry-run" in sys.argv) or (os.environ.get("POWERTRADER_DRY_RUN", "").lower() in ("1", "true", "yes"))
 
 # -----------------------------
 # GUI HUB OUTPUTS
@@ -334,23 +340,39 @@ except Exception:
     BASE64_PRIVATE_KEY = ""
 
 if not API_KEY or not BASE64_PRIVATE_KEY:
-    print(
-        "\n[PowerTrader] Robinhood API credentials not found.\n"
-        "Open the GUI and go to Settings → Robinhood API → Setup / Update.\n"
-        "That wizard will generate your keypair, tell you where to paste the public key on Robinhood,\n"
-        "and will save r_key.txt + r_secret.txt so this trader can authenticate.\n"
-    )
-    raise SystemExit(1)
+    if DRY_RUN:
+        print("[PowerTrader] Running in dry-run mode: Robinhood credentials are not required.")
+    else:
+        print(
+            "\n[PowerTrader] Robinhood API credentials not found.\n"
+            "Open the GUI and go to Settings → Robinhood API → Setup / Update.\n"
+            "That wizard will generate your keypair, tell you where to paste the public key on Robinhood,\n"
+            "and will save r_key.txt + r_secret.txt so this trader can authenticate.\n"
+        )
+        raise SystemExit(1)
+
 
 class CryptoAPITrading:
     def __init__(self):
         # keep a copy of the folder map (same idea as trader.py)
         self.path_map = dict(base_paths)
 
-        self.api_key = API_KEY
-        private_key_seed = base64.b64decode(BASE64_PRIVATE_KEY)
-        self.private_key = SigningKey(private_key_seed)
+        # dry-run mode: simulate Robinhood responses and don't require credentials
+        self.dry_run = bool(DRY_RUN)
+
+        self.api_key = API_KEY if not self.dry_run else ""
         self.base_url = "https://trading.robinhood.com"
+
+        # only decode private key when not dry-run
+        if not self.dry_run:
+            try:
+                private_key_seed = base64.b64decode(BASE64_PRIVATE_KEY)
+                self.private_key = SigningKey(private_key_seed)
+            except Exception:
+                self.private_key = None
+                self.api_key = ""
+        else:
+            self.private_key = None
 
         self.dca_levels_triggered = {}  # Track DCA levels for each crypto
         self.dca_levels = list(DCA_LEVELS)  # Hard DCA triggers (percent PnL)
@@ -543,6 +565,14 @@ class CryptoAPITrading:
 
     def _wait_for_order_terminal(self, symbol: str, order_id: str) -> Optional[dict]:
         """Blocks until order is filled/canceled/rejected, then returns the order dict."""
+        # In dry-run mode, immediately return a fake filled order
+        if getattr(self, "dry_run", False):
+            return {
+                "id": order_id,
+                "state": "filled",
+                "executions": [{"quantity": "1", "effective_price": "30000"}],
+            }
+
         terminal = {"filled", "canceled", "cancelled", "rejected", "failed", "error"}
         while True:
             o = self._get_order_by_id(symbol, order_id)
@@ -1095,6 +1125,36 @@ class CryptoAPITrading:
 
 
     def make_api_request(self, method: str, path: str, body: Optional[str] = "") -> Any:
+        # Dry-run: simulate responses for common endpoints
+        if getattr(self, "dry_run", False):
+            print(f"[dry-run] {method} {path} {'' if not body else body[:200]}")
+            # Accounts
+            if path.startswith("/api/v1/crypto/trading/accounts/"):
+                return {"buying_power": 100000.0}
+            # Holdings
+            if path.startswith("/api/v1/crypto/trading/holdings/"):
+                return {"results": []}
+            # Trading pairs
+            if path.startswith("/api/v1/crypto/trading/trading_pairs/"):
+                return {"results": []}
+            # Best bid/ask market data
+            if path.startswith("/api/v1/crypto/marketdata/best_bid_ask/"):
+                # attempt to parse symbol param
+                try:
+                    q = _urlparse.urlparse(path).query
+                    params = _urlparse.parse_qs(q)
+                    sym = params.get("symbol", [None])[0] or "BTC-USD"
+                except Exception:
+                    sym = "BTC-USD"
+                # return stable fake prices
+                return {"results": [{"ask_inclusive_of_buy_spread": 30000.0, "bid_inclusive_of_sell_spread": 29950.0}]}
+            # Orders listing or posting
+            if path.startswith("/api/v1/crypto/trading/orders/"):
+                if method == "GET":
+                    return {"results": []}
+                if method == "POST":
+                    return {"id": "dry-" + uuid.uuid4().hex}
+            return {}
 
         timestamp = self._get_current_timestamp()
         headers = self.get_authorization_header(method, path, body, timestamp)
@@ -1121,6 +1181,10 @@ class CryptoAPITrading:
     def get_authorization_header(
             self, method: str, path: str, body: str, timestamp: int
     ) -> Dict[str, str]:
+        # In dry-run mode, return empty headers
+        if getattr(self, "dry_run", False) or (not getattr(self, "private_key", None)):
+            return {}
+
         message_to_sign = f"{self.api_key}{timestamp}{path}{method}{body}"
         signed = self.private_key.sign(message_to_sign.encode("utf-8"))
 

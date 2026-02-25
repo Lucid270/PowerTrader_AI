@@ -5331,3 +5331,4 @@ class PowerTraderHub(tk.Tk):
 if __name__ == "__main__":
     app = PowerTraderHub()
     app.mainloop()
+    

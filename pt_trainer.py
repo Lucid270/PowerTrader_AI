@@ -1,3 +1,4 @@
+# (Environment setup and run commands were removed. Use run_trainer.sh for setup.)
 from kucoin.client import Market
 market = Market(url='https://api.kucoin.com')
 import time
@@ -222,6 +223,8 @@ def PrintException():
 how_far_to_look_back = 100000
 number_of_candles = [2]
 number_of_candles_index = 0
+restarted_yet = 0
+
 def restart_program():
 	"""Restarts the current program, with file objects and descriptors cleanup"""
 
@@ -233,13 +236,6 @@ def restart_program():
 		logging.error(e)
 	python = sys.executable
 	os.execl(python, python, * sys.argv)
-try:
-	if restarted_yet > 2:
-		restarted_yet = 0
-	else:	
-		pass
-except:
-	restarted_yet = 0
 tf_choices = ['1hour', '2hour', '4hour', '8hour', '12hour', '1day', '1week']
 tf_minutes = [60, 120, 240, 480, 720, 1440, 10080]
 # --- GUI HUB INPUT (NO PROMPTS) ---
