@@ -1648,6 +1648,8 @@ class CryptoAPITrading:
         account = self.get_account()
         # Fetch holdings
         holdings = self.get_holdings()
+        if holdings is None:
+            holdings = {}
         # Fetch trading pairs
         trading_pairs = self.get_trading_pairs()
 
